@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #333;
+      background: #f5f5f5;
+    }
+
+    h3 {
+      margin: 0 0 16px 0;
+      font-size: 16px;
+      color: #1a1a1a;
+    }
+
+    .setting-group {
+      margin-bottom: 20px;
+    }
+
+    .setting-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    .radio-option {
+      display: flex;
+      align-items: center;
+      padding: 8px;
+      margin-bottom: 4px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .radio-option:hover {
+      background: #e8e8e8;
+    }
+
+    .radio-option input {
+      margin-right: 10px;
+    }
+
+    .status {
+      margin-top: 12px;
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #666;
+      background: #e8e8e8;
+    }
+
+    .status.saved {
+      color: #2e7d32;
+      background: #e8f5e9;
+    }
+  </style>
+</head>
+<body>
+  <h3>Settings</h3>
+
+  <div class="setting-group">
+    <label>Theme Preference</label>
+    <div class="radio-option">
+      <input type="radio" name="theme" id="theme-light" value="light">
+      <label for="theme-light">Light Mode</label>
+    </div>
+    <div class="radio-option">
+      <input type="radio" name="theme" id="theme-dark" value="dark">
+      <label for="theme-dark">Dark Mode</label>
+    </div>
+    <div class="radio-option">
+      <input type="radio" name="theme" id="theme-auto" value="auto" checked>
+      <label for="theme-auto">Auto / System</label>
+    </div>
+  </div>
+
+  <div id="status" class="status">No preference saved</div>
+
+  <script>
+    const THEME_KEY = 'pdf_viewer_theme';
+    const statusEl = document.getElementById('status');
+
+    // Load saved preference
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme) {
+      const radio = document.querySelector(`input[value="${savedTheme}"]`);
+      if (radio) radio.checked = true;
+      statusEl.textContent = `Current: ${savedTheme}`;
+      statusEl.classList.add('saved');
+    }
+
+    // Save on change
+    document.querySelectorAll('input[name="theme"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        const theme = e.target.value;
+        localStorage.setItem(THEME_KEY, theme);
+        statusEl.textContent = `Saved: ${theme}`;
+        statusEl.classList.add('saved');
+
+        // Notify parent viewer of theme change
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: 'themeChange', theme: theme }, '*');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

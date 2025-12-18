@@ -7,22 +7,55 @@
     html, body {
       height: 100%;
       margin: 0;
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      height: 100%;
+    }
+
+    #sidebar {
+      width: 250px;
+      min-width: 250px;
+      background: #f5f5f5;
+      border-right: 1px solid #ddd;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #sidebar.collapsed {
+      width: 0;
+      min-width: 0;
+      border-right: none;
+    }
+
+    #sidebar-content {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #sidebar-content iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
       background: #525659;
-      overflow: auto;
+      overflow: hidden;
     }
 
     #toolbar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
       background: #323639;
       color: white;
       padding: 8px 16px;
       display: flex;
       align-items: center;
       gap: 16px;
-      z-index: 100;
       font-family: sans-serif;
     }
 
@@ -38,10 +71,16 @@
     #toolbar button:hover { background: #6e7175; }
     #toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    #toggle-sidebar {
+      margin-right: 8px;
+    }
+
     #page-info { min-width: 100px; text-align: center; }
+    .spacer { flex: 1; }
 
     #pdf-container {
-      padding-top: 60px;
+      flex: 1;
+      overflow: auto;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -64,24 +103,37 @@
   </style>
 </head>
 <body>
-  <div id="toolbar">
-    <button id="prev-btn" disabled>&larr; Previous</button>
-    <span id="page-info">Waiting for PDF...</span>
-    <button id="next-btn" disabled>Next &rarr;</button>
+  <div id="app">
+    <div id="sidebar">
+      <div id="sidebar-content">
+        <iframe src="settings-panel.html"></iframe>
+      </div>
+    </div>
+
+    <div id="main">
+      <div id="toolbar">
+        <button id="toggle-sidebar" title="Toggle sidebar">&#9776;</button>
+        <button id="prev-btn" disabled>&larr; Prev</button>
+        <span id="page-info">Waiting for PDF...</span>
+        <button id="next-btn" disabled>Next &rarr;</button>
+        <span class="spacer"></span>
+      </div>
+
+      <div id="pdf-container">
+        <div id="loading">Waiting for PDF data...</div>
+        <canvas id="pdf-canvas" style="display: none;"></canvas>
+        <div id="error" style="display: none;"></div>
+      </div>
+    </div>
   </div>
 
-  <div id="pdf-container">
-    <div id="loading">Waiting for PDF data...</div>
-    <canvas id="pdf-canvas" style="display: none;"></canvas>
-    <div id="error" style="display: none;"></div>
-  </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs" type="module"></script>
   <script type="module">
     import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs';
 
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
 
+    const sidebar = document.getElementById('sidebar');
+    const toggleBtn = document.getElementById('toggle-sidebar');
     const canvas = document.getElementById('pdf-canvas');
     const context = canvas.getContext('2d');
     const loadingEl = document.getElementById('loading');
@@ -94,6 +146,11 @@
     let currentPage = 1;
     let totalPages = 0;
     let rendering = false;
+
+    // Toggle sidebar
+    toggleBtn.addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+    });
 
     async function renderPage(pageNum) {
       if (rendering) return;
@@ -133,8 +190,9 @@
       }
     });
 
-    // Listen for PDF data from parent extension
+    // Listen for messages
     window.addEventListener('message', async (event) => {
+      // PDF data from parent extension
       if (event.data.type === 'loadPdf' && event.data.pdfData) {
         try {
           loadingEl.textContent = 'Loading PDF...';
@@ -148,7 +206,6 @@
 
           await renderPage(1);
 
-          // Notify parent that PDF is loaded
           event.source.postMessage({ type: 'pdfLoaded', numPages: totalPages }, event.origin);
         } catch (err) {
           loadingEl.style.display = 'none';
@@ -157,6 +214,11 @@
 
           event.source.postMessage({ type: 'pdfError', message: err.message }, event.origin);
         }
+      }
+
+      // Theme change from settings panel
+      if (event.data.type === 'themeChange') {
+        console.log('Theme changed to:', event.data.theme);
       }
     });
 
