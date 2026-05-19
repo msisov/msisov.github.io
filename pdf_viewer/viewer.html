@@ -71,6 +71,11 @@
     #toolbar button:hover { background: #6e7175; }
     #toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    #sign-in-btn {
+      background: #d93025;
+    }
+    #sign-in-btn:hover { background: #b71c1c; }
+
     #toggle-sidebar {
       margin-right: 8px;
     }
@@ -117,6 +122,7 @@
         <span id="page-info">Waiting for PDF...</span>
         <button id="next-btn" disabled>Next &rarr;</button>
         <span class="spacer"></span>
+        <button id="sign-in-btn" title="Simulates an Adobe-style sign-in redirect">Sign in (visit igalia.com)</button>
       </div>
 
       <div id="pdf-container">
@@ -150,6 +156,21 @@
     // Toggle sidebar
     toggleBtn.addEventListener('click', () => {
       sidebar.classList.toggle('collapsed');
+    });
+
+    // Ask the parent extension page to navigate the tab to a "sign-in"
+    // URL. The parent will use chrome.tabs.update; after the user clicks
+    // the extension toolbar action, the service worker will navigate
+    // the tab back to the original PDF URL.
+    document.getElementById('sign-in-btn').addEventListener('click', () => {
+      if (window.parent === window) {
+        window.location.href = 'https://igalia.com';
+        return;
+      }
+      window.parent.postMessage(
+        { type: 'signIn', url: 'https://igalia.com' },
+        '*'
+      );
     });
 
     async function renderPage(pageNum) {

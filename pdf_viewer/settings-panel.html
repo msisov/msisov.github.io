@@ -89,7 +89,7 @@
     const THEME_KEY = 'pdf_viewer_theme';
     const statusEl = document.getElementById('status');
 
-    // Load saved preference
+    // Load saved preference from localStorage
     const savedTheme = localStorage.getItem(THEME_KEY);
     if (savedTheme) {
       const radio = document.querySelector(`input[value="${savedTheme}"]`);
@@ -98,7 +98,7 @@
       statusEl.classList.add('saved');
     }
 
-    // Save on change
+    // Save on change to localStorage
     document.querySelectorAll('input[name="theme"]').forEach(radio => {
       radio.addEventListener('change', (e) => {
         const theme = e.target.value;
