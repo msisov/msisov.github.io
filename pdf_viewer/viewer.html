@@ -100,60 +100,32 @@
 
     #error { color: #ff6b6b; }
 
-    /* Print plumbing ------------------------------------------------ */
-
-    /* The print container holds one <img> per PDF page. It is
-       hidden during normal viewing. When window.print() fires, we
-       set `body[data-printing]` to swap visibility -- the viewer UI
-       goes away, the rendered page images become the printed
-       document. Same pattern pdf.js's PDFPrintService uses. */
-    #print-container {
-      display: none;
-    }
-
-    body[data-printing] #app {
-      display: none;
-    }
-
-    body[data-printing] #print-container {
-      display: block;
-    }
+    /* Print: pdf.js PDFPrintService layout. The body gets
+       `data-pdfjsprinting` while a print job is in flight; in print
+       media the viewer UI is hidden and #print-container shows the
+       rendered page images. */
+    #print-container { display: none; }
 
     @media print {
       html, body {
         height: auto;
         overflow: visible;
         margin: 0;
-        padding: 0;
         background: white;
       }
-
-      body[data-printing] #app {
-        display: none;
-      }
-
-      body[data-printing] #print-container {
-        display: block;
-      }
-
-      body[data-printing] .printedPage {
-        display: block;
+      body[data-pdfjsprinting] #app { display: none; }
+      body[data-pdfjsprinting] #print-container { display: block; }
+      body[data-pdfjsprinting] .printedPage {
         page-break-after: always;
         page-break-inside: avoid;
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
       }
-
-      body[data-printing] .printedPage:last-child {
+      body[data-pdfjsprinting] .printedPage:last-child {
         page-break-after: auto;
       }
-
-      body[data-printing] .printedPage img {
+      body[data-pdfjsprinting] .printedPage img {
         display: block;
         width: 100%;
         height: 100%;
-        object-fit: contain;
       }
     }
   </style>
@@ -209,147 +181,112 @@
     let totalPages = 0;
     let rendering = false;
 
-    // ----- Print plumbing (pdf.js PDFPrintService pattern) -----------
+    // ----- Print (pdf.js PDFPrintService core architecture) ---------
     //
-    // Render every page to a high-DPI canvas, convert each to a PNG
-    // Blob, embed as <img> in #print-container, swap visibility via
-    // body[data-printing], call native window.print(). The print
-    // preview dialog shows the rendered images; nothing about this
-    // path depends on PDFium being the renderer of the source bytes.
+    // One scratch canvas, reused for every page. Each page is
+    // rasterized at PRINT_UNITS, copied into an <img> inside
+    // #print-container, then the browser's native print() is invoked.
+    // Cleanup is driven by the afterprint event.
 
-    const PRINT_DPI = 150;          // pdf.js default; bump to 300 for
-                                    // higher-quality output.
-    const PDF_DPI = 72;             // PDF native unit.
-    const PRINT_UNITS = PRINT_DPI / PDF_DPI;  // ~2.083
+    const PRINT_RESOLUTION = 150;
+    const PRINT_UNITS = PRINT_RESOLUTION / 72;
+    const nativePrint = window.print.bind(window);
 
-    let printInProgress = false;
-    let printStyleSheet = null;
-    let printBlobUrls = [];
+    let activePrint = null;
 
-    // Renders all pages of `pdfDoc` into #print-container as <img>
-    // elements at print resolution. Awaits every image's load event
-    // before resolving, so window.print() sees a complete document.
-    async function renderAllPagesForPrint() {
-      // @page rule: pdf.js takes the first page's dimensions as the
-      // document-wide page size and warns on heterogeneous PDFs.
-      const firstPage = await pdfDoc.getPage(1);
-      const firstViewport = firstPage.getViewport({ scale: 1 });
-      const pageWidthPt = firstViewport.width;
-      const pageHeightPt = firstViewport.height;
+    async function runPrint() {
+      const scratchCanvas = document.createElement('canvas');
+      const firstSize =
+          (await pdfDoc.getPage(1)).getViewport({ scale: 1 });
+      const pageStyleSheet = document.createElement('style');
+      pageStyleSheet.textContent =
+          `@page { size: ${firstSize.width}pt ${firstSize.height}pt; }`;
+      document.head.append(pageStyleSheet);
+      document.body.setAttribute('data-pdfjsprinting', '');
+      activePrint = { scratchCanvas, pageStyleSheet };
 
-      printStyleSheet = document.createElement('style');
-      printStyleSheet.textContent =
-          `@page { size: ${pageWidthPt}pt ${pageHeightPt}pt; margin: 0; }`;
-      document.head.appendChild(printStyleSheet);
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        await renderAndAppend(i, scratchCanvas);
+      }
 
-      for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
-        const page = await pdfDoc.getPage(pageNum);
-        const viewport = page.getViewport({ scale: PRINT_UNITS });
+      // Push the native print() onto the macrotask queue -- a
+      // microtask-context print() is deprecated. See pdf.js
+      // github.com/mozilla/pdf.js/issues/7547.
+      await new Promise(resolve => {
+        setTimeout(() => {
+          nativePrint();
+          setTimeout(resolve, 20);  // Tidy-up for async print().
+        }, 0);
+      });
+    }
 
-        const printCanvas = document.createElement('canvas');
-        printCanvas.width = Math.floor(viewport.width);
-        printCanvas.height = Math.floor(viewport.height);
+    async function renderAndAppend(pageNumber, scratchCanvas) {
+      const pdfPage = await pdfDoc.getPage(pageNumber);
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      scratchCanvas.width = Math.floor(viewport.width * PRINT_UNITS);
+      scratchCanvas.height = Math.floor(viewport.height * PRINT_UNITS);
 
-        const ctx = printCanvas.getContext('2d');
-        ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, printCanvas.width, printCanvas.height);
+      const ctx = scratchCanvas.getContext('2d');
+      ctx.save();
+      ctx.fillStyle = 'rgb(255, 255, 255)';
+      ctx.fillRect(0, 0, scratchCanvas.width, scratchCanvas.height);
+      ctx.restore();
 
-        await page.render({
-          canvasContext: ctx,
-          viewport,
-          intent: 'print',  // pdf.js: bypass interactive controls,
-                            // use print-flavor annotation rendering.
-        }).promise;
+      await pdfPage.render({
+        canvasContext: ctx,
+        transform: [PRINT_UNITS, 0, 0, PRINT_UNITS, 0, 0],
+        viewport,
+        intent: 'print',
+        annotationMode: pdfjsLib.AnnotationMode.ENABLE_STORAGE,
+      }).promise;
 
-        await new Promise((resolve, reject) => {
-          printCanvas.toBlob(blob => {
-            if (!blob) {
-              reject(new Error(`Page ${pageNum}: toBlob returned null`));
-              return;
-            }
-            const url = URL.createObjectURL(blob);
-            printBlobUrls.push(url);
+      const img = document.createElement('img');
+      const wrapper = document.createElement('div');
+      wrapper.className = 'printedPage';
+      wrapper.append(img);
+      printContainer.append(wrapper);
 
-            const wrapper = document.createElement('div');
-            wrapper.className = 'printedPage';
-            // Inline width/height in points so the @page rule and the
-            // image agree on dimensions even if the user's print CSS
-            // overrides margins later.
-            wrapper.style.width = `${pageWidthPt}pt`;
-            wrapper.style.height = `${pageHeightPt}pt`;
-
-            const img = document.createElement('img');
-            img.src = url;
-            img.onload = () => resolve();
-            img.onerror = () =>
-                reject(new Error(`Page ${pageNum}: img load failed`));
-
-            wrapper.appendChild(img);
-            printContainer.appendChild(wrapper);
-          }, 'image/png');
+      await new Promise((resolve, reject) => {
+        scratchCanvas.toBlob(blob => {
+          img.src = URL.createObjectURL(blob);
         });
-
-        // Release the scratch canvas's GPU/CPU memory between pages.
-        // pdf.js does the same; helps on large documents.
-        printCanvas.width = 0;
-        printCanvas.height = 0;
-      }
+        img.onload = resolve;
+        img.onerror = reject;
+      });
     }
 
-    function cleanupPrint() {
-      printContainer.innerHTML = '';
-      if (printStyleSheet) {
-        printStyleSheet.remove();
-        printStyleSheet = null;
+    function destroyPrint() {
+      if (!activePrint) return;
+      for (const img of printContainer.querySelectorAll('img')) {
+        URL.revokeObjectURL(img.src);
       }
-      for (const url of printBlobUrls) URL.revokeObjectURL(url);
-      printBlobUrls = [];
-      document.body.removeAttribute('data-printing');
-      printInProgress = false;
-      printBtn.disabled = !pdfDoc;
-      printBtn.textContent = 'Print';
+      printContainer.textContent = '';
+      document.body.removeAttribute('data-pdfjsprinting');
+      activePrint.pageStyleSheet.remove();
+      activePrint.scratchCanvas.width = 0;
+      activePrint.scratchCanvas.height = 0;
+      activePrint = null;
     }
 
-    // afterprint fires when the user dismisses the print preview
-    // dialog (printed OR cancelled). pdf.js cleans up in the same
-    // hook.
-    window.addEventListener('afterprint', cleanupPrint);
+    window.addEventListener('afterprint', destroyPrint);
 
-    // Override Window.print() so any trigger (toolbar button,
-    // Ctrl+P, programmatic call) routes through the render-then-print
-    // pipeline. Native print is stashed and invoked at the end.
-    const _nativePrint = window.print.bind(window);
-    window.print = async function () {
-      if (printInProgress) {
-        console.warn('Print already in progress.');
+    window.print = function () {
+      if (activePrint) {
+        console.warn(
+            'Ignored window.print() because of a pending print job.');
         return;
       }
       if (!pdfDoc) {
-        console.warn('Print: no PDF loaded.');
+        nativePrint();
         return;
       }
-      printInProgress = true;
-      printBtn.disabled = true;
-      printBtn.textContent = 'Preparing...';
-      try {
-        dispatchEvent(new Event('beforeprint'));
-        await renderAllPagesForPrint();
-        // Wait for any @font-face the rendered SVG might reference.
-        // Belt-and-braces -- our images are rasters so fonts aren't
-        // load-bearing here, but matches pdf.js's pattern and is
-        // cheap.
-        await document.fonts.ready;
-        document.body.setAttribute('data-printing', '');
-        printBtn.textContent = 'Print';
-        _nativePrint();
-        // afterprint listener triggers cleanupPrint().
-      } catch (e) {
-        console.error('Print preparation failed:', e);
-        cleanupPrint();
-      }
+      runPrint().catch(err => {
+        console.error('Print failed:', err);
+        destroyPrint();
+      });
     };
 
-    printBtn.addEventListener('click', () => { window.print(); });
+    printBtn.addEventListener('click', () => window.print());
 
     // Toggle sidebar
     toggleBtn.addEventListener('click', () => {
@@ -386,15 +323,19 @@
       if (currentPage < totalPages) renderPage(currentPage + 1);
     });
 
-    document.addEventListener('keydown', (e) => {
-      // Ctrl/Cmd+P -> override; pdf.js's PDFPrintService does the
-      // same to keep the keyboard shortcut on the same path as the
-      // toolbar button.
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
-        e.preventDefault();
+    // Route Ctrl/Cmd+P through our window.print override. Capture
+    // phase + stopImmediatePropagation matches pdf.js so we win
+    // against any other keydown listener.
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey
+          && e.key.toLowerCase() === 'p') {
         window.print();
-        return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
       }
+    }, true);
+
+    document.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         if (currentPage > 1) renderPage(currentPage - 1);
       } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
@@ -415,9 +356,9 @@
 
           loadingEl.style.display = 'none';
           canvas.style.display = 'block';
-          printBtn.disabled = false;
 
           await renderPage(1);
+          printBtn.disabled = false;
 
           event.source.postMessage({ type: 'pdfLoaded', numPages: totalPages }, event.origin);
         } catch (err) {
